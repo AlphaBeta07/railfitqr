@@ -1,0 +1,680 @@
+import { useState } from "react";
+import { Link } from "wouter";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { useItems } from "@/hooks/use-items";
+import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
+import { generateItemReport } from "@/lib/pdf-utils";
+import { downloadQRCodesAsZip } from "@/lib/qr-utils";
+import type { Item } from "@shared/schema";
+
+const itemTypeColors = {
+  "wooden-sleeper": "bg-blue-100 text-blue-800",
+  "concrete-sleeper": "bg-green-100 text-green-800",
+  "rail-liner": "bg-purple-100 text-purple-800",
+  "rail-pad": "bg-orange-100 text-orange-800",
+  "elastic-rail-clip": "bg-pink-100 text-pink-800",
+};
+
+const itemTypeLabels = {
+  "wooden-sleeper": "Wooden Sleeper",
+  "concrete-sleeper": "Concrete Sleeper",
+  "rail-liner": "Rail Liner",
+  "rail-pad": "Rail Pad",
+  "elastic-rail-clip": "Elastic Rail Clip",
+};
+
+interface Filters {
+  itemType: string;
+  condition: string;
+  warrantyStatus: string;
+  inspectionStatus: string;
+  vendor: string;
+}
+
+export default function ItemsTable() {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<Filters>({
+    itemType: "all",
+    condition: "all",
+    warrantyStatus: "all",
+    inspectionStatus: "all",
+    vendor: "all"
+  });
+  const { data: items = [], isLoading, error } = useItems();
+  const { toast } = useToast();
+
+  const getWarrantyStatus = (expiryDate: Date | string) => {
+    const expiry = new Date(expiryDate);
+    const now = new Date();
+    const daysUntilExpiry = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (daysUntilExpiry < 0) return "expired";
+    if (daysUntilExpiry <= 90) return "expiring-soon";
+    return "valid";
+  };
+
+  const getInspectionStatusFilter = (lastInspection: Date | string | null) => {
+    if (!lastInspection) return "never";
+    
+    const inspection = new Date(lastInspection);
+    const now = new Date();
+    const daysSinceInspection = Math.ceil((now.getTime() - inspection.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (daysSinceInspection > 180) return "overdue";
+    if (daysSinceInspection > 90) return "due-soon";
+    return "current";
+  };
+
+  const filteredItems = items.filter(item => {
+    // Text search
+    const matchesSearch = !searchTerm || (
+      item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.itemType.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.vendorName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    // Filters
+    const matchesItemType = filters.itemType === "all" || item.itemType === filters.itemType;
+    const matchesCondition = filters.condition === "all" || (item.conditionStatus || "good").toLowerCase() === filters.condition.toLowerCase();
+    const matchesWarranty = filters.warrantyStatus === "all" || (item.warrantyExpiryDate && getWarrantyStatus(item.warrantyExpiryDate) === filters.warrantyStatus);
+    const matchesInspection = filters.inspectionStatus === "all" || getInspectionStatusFilter(item.lastInspectionDate) === filters.inspectionStatus;
+    const matchesVendor = filters.vendor === "all" || item.vendorName === filters.vendor;
+
+    return matchesSearch && matchesItemType && matchesCondition && matchesWarranty && matchesInspection && matchesVendor;
+  });
+
+  const handleDownloadQR = async (item: Item) => {
+    try {
+      const qrData = await api.getQRCode(item.id);
+      
+      // Create download link
+      const link = document.createElement("a");
+      link.href = qrData.qrCode;
+      link.download = `qr-${item.id}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast({
+        title: "Success",
+        description: "QR code downloaded successfully!",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to download QR code",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleGenerateReport = async (item: Item) => {
+    try {
+      // Get AI summary
+      const aiSummary = await api.generateSummary({
+        itemId: item.id,
+        itemType: item.itemType,
+        vendor: item.vendorName,
+        supplyDate: item.supplyDate,
+        warrantyPeriod: item.warrantyPeriod,
+        lastInspection: item.lastInspectionDate,
+        condition: item.conditionStatus,
+      });
+
+      await generateItemReport(item, aiSummary.summary);
+      
+      toast({
+        title: "Success",
+        description: "Report generated successfully!",
+      });
+    } catch (error) {
+      // Fallback: generate report without AI summary
+      await generateItemReport(item);
+      toast({
+        title: "Report Generated",
+        description: "Report generated without AI summary",
+      });
+    }
+  };
+
+  const getWarrantyExpiryColor = (expiryDate: Date | string | null) => {
+    if (!expiryDate) return "text-muted-foreground";
+    const expiry = new Date(expiryDate);
+    if (isNaN(expiry.getTime())) return "text-muted-foreground";
+    const now = new Date();
+    const daysUntilExpiry = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (daysUntilExpiry < 0) return "text-destructive";
+    if (daysUntilExpiry <= 90) return "text-warning";
+    return "text-accent";
+  };
+
+  const getInspectionStatus = (lastInspection: Date | string | null) => {
+    if (!lastInspection) return { text: "Never", color: "text-destructive" };
+    
+    const inspection = new Date(lastInspection);
+    const now = new Date();
+    const daysSinceInspection = Math.ceil((now.getTime() - inspection.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (daysSinceInspection > 180) {
+      return { text: "Overdue", color: "text-destructive" };
+    }
+    
+    return { 
+      text: new Date(lastInspection).toLocaleDateString(), 
+      color: "text-foreground" 
+    };
+  };
+
+  // Bulk operations
+  const handleSelectAll = () => {
+    if (selectedItems.size === filteredItems.length) {
+      setSelectedItems(new Set());
+    } else {
+      setSelectedItems(new Set(filteredItems.map(item => item.id)));
+    }
+  };
+
+  const handleSelectItem = (itemId: string) => {
+    const newSelected = new Set(selectedItems);
+    if (newSelected.has(itemId)) {
+      newSelected.delete(itemId);
+    } else {
+      newSelected.add(itemId);
+    }
+    setSelectedItems(newSelected);
+  };
+
+  const handleBulkDownloadQR = async () => {
+    if (selectedItems.size === 0) return;
+    
+    setIsProcessingBulk(true);
+    try {
+      const selectedItemsData = items.filter(item => selectedItems.has(item.id));
+      await downloadQRCodesAsZip(selectedItemsData);
+      
+      toast({
+        title: "Success",
+        description: `Downloaded QR codes for ${selectedItems.size} items`,
+      });
+      setSelectedItems(new Set());
+    } catch (error) {
+      toast({
+        title: "Error", 
+        description: "Failed to download QR codes",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessingBulk(false);
+    }
+  };
+
+  const handleBulkExportReports = async () => {
+    if (selectedItems.size === 0) return;
+    
+    setIsProcessingBulk(true);
+    try {
+      const selectedItemsData = items.filter(item => selectedItems.has(item.id));
+      
+      for (const item of selectedItemsData) {
+        try {
+          const aiSummary = await api.generateSummary({
+            itemId: item.id,
+            itemType: item.itemType,
+            vendor: item.vendorName,
+            supplyDate: item.supplyDate,
+            warrantyPeriod: item.warrantyPeriod,
+            lastInspection: item.lastInspectionDate,
+            condition: item.conditionStatus,
+          });
+          await generateItemReport(item, aiSummary.summary);
+        } catch (error) {
+          // Fallback without AI summary
+          await generateItemReport(item);
+        }
+      }
+      
+      toast({
+        title: "Success",
+        description: `Generated reports for ${selectedItems.size} items`,
+      });
+      setSelectedItems(new Set());
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate some reports",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessingBulk(false);
+    }
+  };
+
+  const handleBulkExportCSV = () => {
+    if (selectedItems.size === 0) return;
+    
+    const selectedItemsData = items.filter(item => selectedItems.has(item.id));
+    const csvHeaders = [
+      "Item ID",
+      "Type",
+      "Vendor",
+      "Supply Date", 
+      "Warranty Period (months)",
+      "Warranty Expiry",
+      "Last Inspection",
+      "Condition",
+      "Inspection Notes"
+    ];
+    
+    const csvRows = selectedItemsData.map(item => [
+      item.id,
+      itemTypeLabels[item.itemType as keyof typeof itemTypeLabels] || item.itemType,
+      item.vendorName,
+      new Date(item.supplyDate).toLocaleDateString(),
+      item.warrantyPeriod.toString(),
+      new Date(item.warrantyExpiryDate!).toLocaleDateString(),
+      item.lastInspectionDate ? new Date(item.lastInspectionDate).toLocaleDateString() : "Never",
+      item.conditionStatus || "Good",
+      item.inspectionNotes || ""
+    ]);
+    
+    const csvContent = [csvHeaders, ...csvRows]
+      .map(row => row.map(field => `"${field.toString().replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `railway-items-export-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast({
+      title: "Success",
+      description: `Exported ${selectedItems.size} items to CSV`,
+    });
+    setSelectedItems(new Set());
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      itemType: "all",
+      condition: "all",
+      warrantyStatus: "all",
+      inspectionStatus: "all",
+      vendor: "all"
+    });
+    setSearchTerm("");
+  };
+
+  const hasActiveFilters = Object.values(filters).some(value => value !== "all") || searchTerm.length > 0;
+
+  // Get unique vendors for filter
+  const uniqueVendors = Array.from(new Set(items.map(item => item.vendorName)));
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <div className="text-center text-destructive">
+            <i className="fas fa-exclamation-triangle text-4xl mb-4"></i>
+            <p>Failed to load items. Please try again.</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="shadow-sm">
+      <CardHeader className="border-b border-border">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex items-center gap-4">
+            <h2 className="text-lg font-semibold">Track Fitting Inventory</h2>
+            {selectedItems.size > 0 && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span>{selectedItems.size} selected</span>
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={() => setSelectedItems(new Set())}
+                  className="h-6 px-2 text-xs"
+                >
+                  Clear
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <div className="relative">
+              <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground"></i>
+              <Input
+                type="text"
+                placeholder="Search items..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 w-64"
+                data-testid="search-items"
+              />
+            </div>
+            <Popover open={showFilters} onOpenChange={setShowFilters}>
+              <PopoverTrigger asChild>
+                <Button 
+                  variant={hasActiveFilters ? "default" : "outline"} 
+                  data-testid="filter-button"
+                  className={hasActiveFilters ? "bg-accent text-accent-foreground" : ""}
+                >
+                  <i className="fas fa-filter mr-2"></i>
+                  Filter
+                  {hasActiveFilters && <span className="ml-1 bg-white text-accent rounded-full px-1 text-xs">•</span>}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 p-4" align="end">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium">Filter Items</h4>
+                    {hasActiveFilters && (
+                      <Button variant="ghost" size="sm" onClick={clearFilters} data-testid="clear-filters">
+                        Clear All
+                      </Button>
+                    )}
+                  </div>
+                  
+                  <div className="grid gap-3">
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Item Type</label>
+                      <Select value={filters.itemType} onValueChange={(value) => setFilters(prev => ({ ...prev, itemType: value }))}>
+                        <SelectTrigger data-testid="filter-item-type">
+                          <SelectValue placeholder="All types" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Types</SelectItem>
+                          <SelectItem value="wooden-sleeper">Wooden Sleeper</SelectItem>
+                          <SelectItem value="concrete-sleeper">Concrete Sleeper</SelectItem>
+                          <SelectItem value="rail-liner">Rail Liner</SelectItem>
+                          <SelectItem value="rail-pad">Rail Pad</SelectItem>
+                          <SelectItem value="elastic-rail-clip">Elastic Rail Clip</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Condition</label>
+                      <Select value={filters.condition} onValueChange={(value) => setFilters(prev => ({ ...prev, condition: value }))}>
+                        <SelectTrigger data-testid="filter-condition">
+                          <SelectValue placeholder="All conditions" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Conditions</SelectItem>
+                          <SelectItem value="excellent">Excellent</SelectItem>
+                          <SelectItem value="good">Good</SelectItem>
+                          <SelectItem value="fair">Fair</SelectItem>
+                          <SelectItem value="poor">Poor</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Warranty Status</label>
+                      <Select value={filters.warrantyStatus} onValueChange={(value) => setFilters(prev => ({ ...prev, warrantyStatus: value }))}>
+                        <SelectTrigger data-testid="filter-warranty-status">
+                          <SelectValue placeholder="All warranties" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Warranties</SelectItem>
+                          <SelectItem value="valid">Valid</SelectItem>
+                          <SelectItem value="expiring-soon">Expiring Soon (≤90 days)</SelectItem>
+                          <SelectItem value="expired">Expired</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Inspection Status</label>
+                      <Select value={filters.inspectionStatus} onValueChange={(value) => setFilters(prev => ({ ...prev, inspectionStatus: value }))}>
+                        <SelectTrigger data-testid="filter-inspection-status">
+                          <SelectValue placeholder="All inspections" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Inspections</SelectItem>
+                          <SelectItem value="current">Current (≤90 days)</SelectItem>
+                          <SelectItem value="due-soon">Due Soon (90-180 days)</SelectItem>
+                          <SelectItem value="overdue">Overdue (&gt;180 days)</SelectItem>
+                          <SelectItem value="never">Never Inspected</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Vendor</label>
+                      <Select value={filters.vendor} onValueChange={(value) => setFilters(prev => ({ ...prev, vendor: value }))}>
+                        <SelectTrigger data-testid="filter-vendor">
+                          <SelectValue placeholder="All vendors" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Vendors</SelectItem>
+                          {uniqueVendors.map(vendor => (
+                            <SelectItem key={vendor} value={vendor}>{vendor}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </div>
+        
+        {/* Bulk Actions */}
+        {selectedItems.size > 0 && (
+          <div className="flex flex-wrap gap-2 pt-4 border-t border-border">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleBulkDownloadQR}
+              disabled={isProcessingBulk}
+              data-testid="bulk-download-qr"
+            >
+              <i className="fas fa-download mr-2"></i>
+              Download QR Codes ({selectedItems.size})
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleBulkExportReports}
+              disabled={isProcessingBulk}
+              data-testid="bulk-export-reports"
+            >
+              <i className="fas fa-file-pdf mr-2"></i>
+              Generate Reports ({selectedItems.size})
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleBulkExportCSV}
+              disabled={isProcessingBulk}
+              data-testid="bulk-export-csv"
+            >
+              <i className="fas fa-file-csv mr-2"></i>
+              Export CSV ({selectedItems.size})
+            </Button>
+          </div>
+        )}
+      </CardHeader>
+      
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="p-6 space-y-4">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex justify-between items-center p-4 border-b border-border last:border-b-0">
+                <div className="flex gap-4 flex-1">
+                  <div className="w-24 h-4 bg-muted rounded skeleton"></div>
+                  <div className="w-32 h-4 bg-muted rounded skeleton"></div>
+                  <div className="w-28 h-4 bg-muted rounded skeleton"></div>
+                  <div className="w-20 h-4 bg-muted rounded skeleton"></div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="w-8 h-8 bg-muted rounded skeleton"></div>
+                  <div className="w-8 h-8 bg-muted rounded skeleton"></div>
+                  <div className="w-8 h-8 bg-muted rounded skeleton"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground w-12">
+                    <Checkbox
+                      checked={filteredItems.length > 0 && selectedItems.size === filteredItems.length}
+                      onCheckedChange={handleSelectAll}
+                      data-testid="select-all-checkbox"
+                    />
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">
+                    Item ID
+                    <i className="fas fa-sort ml-1 cursor-pointer hover:text-foreground"></i>
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">
+                    Type
+                    <i className="fas fa-sort ml-1 cursor-pointer hover:text-foreground"></i>
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">
+                    Vendor
+                    <i className="fas fa-sort ml-1 cursor-pointer hover:text-foreground"></i>
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">
+                    Supply Date
+                    <i className="fas fa-sort ml-1 cursor-pointer hover:text-foreground"></i>
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">
+                    Warranty Expiry
+                    <i className="fas fa-sort ml-1 cursor-pointer hover:text-foreground"></i>
+                  </th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">Last Inspection</th>
+                  <th className="text-left py-3 px-6 font-medium text-sm text-muted-foreground">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-muted-foreground">
+                      {searchTerm ? "No items match your search." : "No items found. Create your first items to get started."}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredItems.map((item) => {
+                    const inspectionStatus = getInspectionStatus(item.lastInspectionDate);
+                    
+                    return (
+                      <tr 
+                        key={item.id} 
+                        className="border-b border-border hover:bg-muted/30 transition-colors"
+                        data-testid={`item-row-${item.id}`}
+                      >
+                        <td className="py-4 px-6">
+                          <Checkbox
+                            checked={selectedItems.has(item.id)}
+                            onCheckedChange={() => handleSelectItem(item.id)}
+                            data-testid={`select-item-${item.id}`}
+                          />
+                        </td>
+                        <td className="py-4 px-6">
+                          <span className="font-mono text-sm">{item.id}</span>
+                        </td>
+                        <td className="py-4 px-6">
+                          <span 
+                            className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              itemTypeColors[item.itemType as keyof typeof itemTypeColors] || "bg-gray-100 text-gray-800"
+                            }`}
+                          >
+                            {itemTypeLabels[item.itemType as keyof typeof itemTypeLabels] || item.itemType}
+                          </span>
+                        </td>
+                        <td className="py-4 px-6">{item.vendorName}</td>
+                        <td className="py-4 px-6">{new Date(item.supplyDate).toLocaleDateString()}</td>
+                        <td className="py-4 px-6">
+                          <span className={getWarrantyExpiryColor(item.warrantyExpiryDate!)}>
+                            {new Date(item.warrantyExpiryDate!).toLocaleDateString()}
+                          </span>
+                        </td>
+                        <td className="py-4 px-6">
+                          <span className={inspectionStatus.color}>
+                            {inspectionStatus.text}
+                          </span>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex gap-2">
+                            <Link href={`/item/${item.id}`}>
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                className="p-2 text-primary hover:bg-primary/10"
+                                data-testid={`view-item-${item.id}`}
+                              >
+                                <i className="fas fa-eye" title="View Details"></i>
+                              </Button>
+                            </Link>
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => handleDownloadQR(item)}
+                              className="p-2 text-accent hover:bg-accent/10"
+                              data-testid={`download-qr-${item.id}`}
+                            >
+                              <i className="fas fa-download" title="Download QR"></i>
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => handleGenerateReport(item)}
+                              className="p-2 text-muted-foreground hover:bg-muted"
+                              data-testid={`generate-report-${item.id}`}
+                            >
+                              <i className="fas fa-file-pdf" title="Generate Report"></i>
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+        
+        {!isLoading && filteredItems.length > 0 && (
+          <div className="flex items-center justify-between p-6 border-t border-border">
+            <p className="text-sm text-muted-foreground">
+              Showing {filteredItems.length} of {items.length} items
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm">Previous</Button>
+              <Button variant="default" size="sm">1</Button>
+              <Button variant="outline" size="sm">2</Button>
+              <Button variant="outline" size="sm">3</Button>
+              <Button variant="outline" size="sm">Next</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

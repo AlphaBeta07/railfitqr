@@ -1,0 +1,163 @@
+import { type Item, type InsertItem, type UpdateItem, type Vendor, type InsertVendor, type Inspection, type InsertInspection, items, vendors, inspections } from "@shared/schema";
+import { db } from "./db";
+import { eq, and, lte, gt, isNull, sql, count } from "drizzle-orm";
+
+export interface IStorage {
+  // Items
+  getItems(): Promise<Item[]>;
+  getItem(id: string): Promise<Item | undefined>;
+  createItem(item: InsertItem): Promise<Item>;
+  updateItem(id: string, item: UpdateItem): Promise<Item | undefined>;
+  deleteItem(id: string): Promise<boolean>;
+  
+  // Vendors
+  getVendors(): Promise<Vendor[]>;
+  getVendor(id: string): Promise<Vendor | undefined>;
+  getVendorByName(name: string): Promise<Vendor | undefined>;
+  createVendor(vendor: InsertVendor): Promise<Vendor>;
+  
+  // Inspections
+  getInspections(): Promise<Inspection[]>;
+  getInspectionsByItemId(itemId: string): Promise<Inspection[]>;
+  createInspection(inspection: InsertInspection): Promise<Inspection>;
+  
+  // Statistics
+  getStats(): Promise<{
+    totalItems: number;
+    warrantyExpiring: number;
+    inspectionsOverdue: number;
+    activeVendors: number;
+  }>;
+}
+
+export class DatabaseStorage implements IStorage {
+  async getItems(): Promise<Item[]> {
+    return await db.select().from(items);
+  }
+
+  async getItem(id: string): Promise<Item | undefined> {
+    const [item] = await db.select().from(items).where(eq(items.id, id));
+    return item || undefined;
+  }
+
+  async createItem(insertItem: InsertItem): Promise<Item> {
+    const warrantyExpiryDate = new Date(insertItem.supplyDate);
+    warrantyExpiryDate.setMonth(warrantyExpiryDate.getMonth() + insertItem.warrantyPeriod);
+    
+    const [item] = await db
+      .insert(items)
+      .values({
+        ...insertItem,
+        warrantyExpiryDate,
+        qrCodeUrl: null, // Will be set after creation
+      })
+      .returning();
+    
+    // Update QR code URL with the generated ID
+    const [updatedItem] = await db
+      .update(items)
+      .set({ qrCodeUrl: `/api/qr/${item.id}` })
+      .where(eq(items.id, item.id))
+      .returning();
+    
+    return updatedItem;
+  }
+
+  async updateItem(id: string, updateItem: UpdateItem): Promise<Item | undefined> {
+    const [updatedItem] = await db
+      .update(items)
+      .set({
+        ...updateItem,
+        updatedAt: new Date(),
+      })
+      .where(eq(items.id, id))
+      .returning();
+    
+    return updatedItem || undefined;
+  }
+
+  async deleteItem(id: string): Promise<boolean> {
+    const result = await db.delete(items).where(eq(items.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  async getVendors(): Promise<Vendor[]> {
+    return await db.select().from(vendors);
+  }
+
+  async getVendor(id: string): Promise<Vendor | undefined> {
+    const [vendor] = await db.select().from(vendors).where(eq(vendors.id, id));
+    return vendor || undefined;
+  }
+
+  async getVendorByName(name: string): Promise<Vendor | undefined> {
+    const [vendor] = await db.select().from(vendors).where(eq(vendors.name, name));
+    return vendor || undefined;
+  }
+
+  async createVendor(insertVendor: InsertVendor): Promise<Vendor> {
+    const [vendor] = await db
+      .insert(vendors)
+      .values(insertVendor)
+      .returning();
+    
+    return vendor;
+  }
+
+  async getInspections(): Promise<Inspection[]> {
+    return await db.select().from(inspections);
+  }
+
+  async getInspectionsByItemId(itemId: string): Promise<Inspection[]> {
+    return await db.select().from(inspections).where(eq(inspections.itemId, itemId));
+  }
+
+  async createInspection(insertInspection: InsertInspection): Promise<Inspection> {
+    const [inspection] = await db
+      .insert(inspections)
+      .values(insertInspection)
+      .returning();
+    
+    return inspection;
+  }
+
+  async getStats(): Promise<{
+    totalItems: number;
+    warrantyExpiring: number;
+    inspectionsOverdue: number;
+    activeVendors: number;
+  }> {
+    const now = new Date();
+    const ninetyDaysFromNow = new Date();
+    ninetyDaysFromNow.setDate(now.getDate() + 90);
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(now.getMonth() - 6);
+
+    const [totalItemsResult] = await db.select({ count: count() }).from(items);
+    const [warrantyExpiringResult] = await db
+      .select({ count: count() })
+      .from(items)
+      .where(and(
+        lte(items.warrantyExpiryDate, ninetyDaysFromNow),
+        gt(items.warrantyExpiryDate, now)
+      ));
+    
+    const [inspectionsOverdueResult] = await db
+      .select({ count: count() })
+      .from(items)
+      .where(
+        sql`${items.lastInspectionDate} IS NULL OR ${items.lastInspectionDate} < ${sixMonthsAgo}`
+      );
+    
+    const [activeVendorsResult] = await db.select({ count: count() }).from(vendors);
+
+    return {
+      totalItems: totalItemsResult.count,
+      warrantyExpiring: warrantyExpiringResult.count,
+      inspectionsOverdue: inspectionsOverdueResult.count,
+      activeVendors: activeVendorsResult.count,
+    };
+  }
+}
+
+export const storage = new DatabaseStorage();

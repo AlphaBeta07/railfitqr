@@ -1,0 +1,342 @@
+import { useState, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { scanQRCode, startCameraScanning, isCameraSupported } from "@/lib/qr-utils";
+import type QrScanner from "qr-scanner";
+
+interface ScanHistory {
+  id: string;
+  timestamp: Date;
+}
+
+export default function Scanner() {
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanHistory, setScanHistory] = useState<ScanHistory[]>([
+    { id: "WS-2024-001", timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+    { id: "CS-2024-045", timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+  ]);
+  const [manualId, setManualId] = useState("");
+  const [cameraSupported, setCameraSupported] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const qrScannerRef = useRef<QrScanner | null>(null);
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setCameraSupported(isCameraSupported());
+    
+    // Cleanup scanner on unmount
+    return () => {
+      if (qrScannerRef.current) {
+        qrScannerRef.current.stop();
+        qrScannerRef.current.destroy();
+      }
+    };
+  }, []);
+
+  const stopCamera = () => {
+    if (qrScannerRef.current) {
+      qrScannerRef.current.stop();
+      qrScannerRef.current.destroy();
+      qrScannerRef.current = null;
+    }
+    setIsScanning(false);
+  };
+
+  const handleStartCamera = async () => {
+    if (isScanning) {
+      // Stop scanning
+      stopCamera();
+      toast({
+        title: "Camera Stopped",
+        description: "QR scanning paused",
+      });
+    } else {
+      // Start scanning
+      if (!cameraSupported) {
+        toast({
+          title: "Camera Not Supported",
+          description: "Your device doesn't support camera access",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!videoRef.current) {
+        toast({
+          title: "Error",
+          description: "Video element not found",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        const scanner = await startCameraScanning(
+          videoRef.current,
+          (result) => {
+            handleSuccessfulScan(result.id);
+            // Auto-stop after successful scan to prevent race conditions
+            setTimeout(() => {
+              stopCamera();
+              toast({
+                title: "Scanner Stopped",
+                description: "Scan complete - camera stopped automatically",
+              });
+            }, 100);
+          },
+          (error) => {
+            toast({
+              title: "Camera Error",
+              description: error,
+              variant: "destructive",
+            });
+            stopCamera();
+          }
+        );
+        
+        qrScannerRef.current = scanner;
+        setIsScanning(true);
+        toast({
+          title: "Camera Started",
+          description: "Point camera at QR code to scan",
+        });
+      } catch (error) {
+        console.error("Failed to start camera:", error);
+        toast({
+          title: "Camera Error",
+          description: "Failed to start camera. Please check permissions.",
+          variant: "destructive",
+        });
+        stopCamera();
+      }
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const qrData = await scanQRCode(file);
+      handleSuccessfulScan(qrData.id);
+    } catch (error) {
+      toast({
+        title: "Scan Failed",
+        description: "Could not read QR code from image",
+        variant: "destructive",
+      });
+    } finally {
+      // Clear file input to allow re-upload of same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleManualEntry = () => {
+    if (!manualId.trim()) {
+      toast({
+        title: "Invalid Input",
+        description: "Please enter a valid item ID",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    handleSuccessfulScan(manualId);
+    setManualId("");
+  };
+
+  const handleSuccessfulScan = (itemId: string) => {
+    // Add to scan history
+    setScanHistory(prev => [
+      { id: itemId, timestamp: new Date() },
+      ...prev.slice(0, 9) // Keep only last 10 scans
+    ]);
+
+    toast({
+      title: "QR Code Scanned",
+      description: `Successfully scanned item ${itemId}`,
+    });
+
+    // Navigate to item details
+    setLocation(`/item/${itemId}`);
+  };
+
+  const formatTimeAgo = (timestamp: Date) => {
+    const now = new Date();
+    const diffMs = now.getTime() - timestamp.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) {
+      return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    } else if (diffHours > 0) {
+      return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    } else {
+      return "Just now";
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-3xl font-bold mb-2">QR Code Scanner</h1>
+        <p className="text-muted-foreground">Scan QR codes to view and update item details</p>
+      </div>
+
+      <div className="max-w-md mx-auto space-y-8">
+        {/* Scanner */}
+        <Card className="shadow-sm">
+          <CardContent className="p-6">
+            <div className="text-center">
+              <div className={`w-64 h-64 mx-auto mb-6 rounded-lg flex items-center justify-center relative overflow-hidden ${
+                isScanning ? "bg-black" : "bg-muted"
+              }`}>
+                {isScanning ? (
+                  <>
+                    <video
+                      ref={videoRef}
+                      className="w-full h-full object-cover rounded-lg"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                    <div className="absolute inset-4 border-2 border-accent rounded-lg pointer-events-none"></div>
+                    <div className="absolute top-1/2 left-1/2 w-16 h-0.5 bg-accent transform -translate-x-1/2 -translate-y-1/2 animate-pulse pointer-events-none"></div>
+                  </>
+                ) : (
+                  <div className="text-center">
+                    <i className="fas fa-camera text-4xl text-muted-foreground mb-2"></i>
+                    {!cameraSupported && (
+                      <p className="text-xs text-destructive">Camera not supported</p>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              <h3 className="text-lg font-semibold mb-2">Position QR Code in Frame</h3>
+              <p className="text-muted-foreground mb-6">Align the QR code within the scanning area</p>
+              
+              <Button 
+                onClick={handleStartCamera}
+                className="w-full bg-accent text-accent-foreground hover:bg-accent/90 mb-4"
+                disabled={!cameraSupported}
+                data-testid="start-camera-button"
+              >
+                <i className={`fas ${isScanning ? "fa-stop" : "fa-play"} mr-2`}></i>
+                {isScanning ? "Stop Camera" : cameraSupported ? "Start Camera" : "Camera Not Available"}
+              </Button>
+              
+              <div className="flex gap-2">
+                <Button 
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="upload-image-button"
+                >
+                  <i className="fas fa-image mr-2"></i>
+                  Upload Image
+                </Button>
+                <Button 
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => {
+                    const id = prompt("Enter Item ID:");
+                    if (id) {
+                      setManualId(id);
+                      handleManualEntry();
+                    }
+                  }}
+                  data-testid="manual-entry-button"
+                >
+                  <i className="fas fa-keyboard mr-2"></i>
+                  Manual Entry
+                </Button>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+                data-testid="file-input"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Manual Entry Card */}
+        <Card className="shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-center">Manual Item ID Entry</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter item ID (e.g., WS-2024-001)"
+                value={manualId}
+                onChange={(e) => setManualId(e.target.value)}
+                onKeyPress={(e) => e.key === "Enter" && handleManualEntry()}
+                data-testid="manual-id-input"
+              />
+              <Button 
+                onClick={handleManualEntry}
+                disabled={!manualId.trim()}
+                data-testid="manual-submit-button"
+              >
+                <i className="fas fa-search"></i>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recent Scans */}
+        <Card className="shadow-sm">
+          <CardHeader>
+            <CardTitle>Recent Scans</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {scanHistory.length === 0 ? (
+              <div className="text-center text-muted-foreground py-8">
+                <i className="fas fa-qrcode text-4xl mb-4"></i>
+                <p>No recent scans</p>
+                <p className="text-sm">Start scanning to see your history</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {scanHistory.map((scan, index) => (
+                  <div 
+                    key={`${scan.id}-${index}`} 
+                    className="flex items-center justify-between p-3 bg-muted/30 rounded-md hover:bg-muted/50 transition-colors"
+                    data-testid={`scan-history-${scan.id}`}
+                  >
+                    <div>
+                      <p className="font-mono text-sm">{scan.id}</p>
+                      <p className="text-xs text-muted-foreground">{formatTimeAgo(scan.timestamp)}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setLocation(`/item/${scan.id}`)}
+                      className="text-primary hover:text-primary/80"
+                      data-testid={`view-scanned-item-${scan.id}`}
+                    >
+                      <i className="fas fa-external-link-alt"></i>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

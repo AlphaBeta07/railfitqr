@@ -1,0 +1,188 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Indian Railways Theme Colors */
+  --background: hsl(210, 40%, 98%);
+  --foreground: hsl(222, 84%, 5%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(222, 84%, 5%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(222, 84%, 5%);
+  
+  /* Primary: Deep Blue (Indian Railways Blue) */
+  --primary: hsl(221, 83%, 53%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  
+  /* Secondary: Metallic Gray */
+  --secondary: hsl(210, 40%, 96%);
+  --secondary-foreground: hsl(222, 47%, 11%);
+  
+  /* Muted: Light Gray Backgrounds */
+  --muted: hsl(210, 40%, 96%);
+  --muted-foreground: hsl(215, 16%, 47%);
+  
+  /* Accent: Signal Green */
+  --accent: hsl(142, 76%, 36%);
+  --accent-foreground: hsl(210, 40%, 98%);
+  
+  /* Signal Yellow for Warnings */
+  --warning: hsl(45, 93%, 47%);
+  --warning-foreground: hsl(222, 84%, 5%);
+  
+  /* Destructive: Alert Red */
+  --destructive: hsl(0, 84%, 60%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  
+  /* Border and Input */
+  --border: hsl(214, 32%, 91%);
+  --input: hsl(214, 32%, 91%);
+  --ring: hsl(221, 83%, 53%);
+  
+  /* Chart Colors */
+  --chart-1: hsl(221, 83%, 53%);
+  --chart-2: hsl(142, 76%, 36%);
+  --chart-3: hsl(45, 93%, 47%);
+  --chart-4: hsl(197, 71%, 48%);
+  --chart-5: hsl(262, 83%, 58%);
+  
+  /* Sidebar Colors */
+  --sidebar: hsl(0, 0%, 100%);
+  --sidebar-foreground: hsl(222, 84%, 5%);
+  --sidebar-primary: hsl(221, 83%, 53%);
+  --sidebar-primary-foreground: hsl(210, 40%, 98%);
+  --sidebar-accent: hsl(210, 40%, 96%);
+  --sidebar-accent-foreground: hsl(221, 83%, 53%);
+  --sidebar-border: hsl(214, 32%, 91%);
+  --sidebar-ring: hsl(221, 83%, 53%);
+  
+  /* Typography */
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: Menlo, monospace;
+  
+  /* Radius */
+  --radius: 8px;
+}
+
+.dark {
+  --background: hsl(222, 84%, 5%);
+  --foreground: hsl(210, 40%, 98%);
+  --card: hsl(228, 10%, 10%);
+  --card-foreground: hsl(210, 40%, 98%);
+  --popover: hsl(228, 10%, 10%);
+  --popover-foreground: hsl(210, 40%, 98%);
+  --primary: hsl(221, 83%, 58%);
+  --primary-foreground: hsl(222, 84%, 5%);
+  --secondary: hsl(228, 10%, 15%);
+  --secondary-foreground: hsl(210, 40%, 98%);
+  --muted: hsl(228, 10%, 15%);
+  --muted-foreground: hsl(215, 16%, 65%);
+  --accent: hsl(142, 76%, 41%);
+  --accent-foreground: hsl(222, 84%, 5%);
+  --destructive: hsl(0, 84%, 60%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  --border: hsl(228, 10%, 20%);
+  --input: hsl(228, 10%, 20%);
+  --ring: hsl(221, 83%, 58%);
+  --sidebar: hsl(228, 10%, 10%);
+  --sidebar-foreground: hsl(210, 40%, 98%);
+  --sidebar-primary: hsl(221, 83%, 58%);
+  --sidebar-primary-foreground: hsl(222, 84%, 5%);
+  --sidebar-accent: hsl(228, 10%, 15%);
+  --sidebar-accent-foreground: hsl(221, 83%, 58%);
+  --sidebar-border: hsl(228, 10%, 20%);
+  --sidebar-ring: hsl(221, 83%, 58%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+@layer components {
+  /* Card gradient for enhanced visual depth */
+  .card-gradient {
+    background: linear-gradient(135deg, hsl(var(--card)) 0%, hsl(210, 40%, 99%) 100%);
+  }
+  
+  /* Primary gradient for headers and CTAs */
+  .gradient-bg {
+    background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(221, 83%, 45%) 100%);
+  }
+  
+  /* Skeleton loader animation */
+  .skeleton {
+    background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(210, 40%, 93%) 50%, hsl(var(--muted)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+  
+  /* Page transition animation */
+  .page-transition {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+  
+  /* Toast notification positioning */
+  .toast {
+    transform: translateX(100%);
+    transition: transform 0.3s ease-in-out;
+  }
+  
+  .toast.show {
+    transform: translateX(0);
+  }
+}
+
+@keyframes shimmer {
+  0% { 
+    background-position: -200% 0; 
+  }
+  100% { 
+    background-position: 200% 0; 
+  }
+}
+
+@keyframes fadeIn {
+  from { 
+    opacity: 0; 
+    transform: translateY(10px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+/* Custom scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary));
+}
+
+/* Focus styles for accessibility */
+.focus-visible:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
