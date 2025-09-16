@@ -47,7 +47,7 @@ export default function Sidebar() {
           <i className="fas fa-train text-sidebar-primary-foreground text-lg"></i>
         </div>
         <div>
-          <h1 className="text-lg font-semibold text-sidebar-foreground">RailTrack Pro</h1>
+          <h1 className="text-lg font-semibold text-sidebar-foreground">RailVision</h1>
           <p className="text-xs text-muted-foreground">Indian Railways</p>
         </div>
       </div>
